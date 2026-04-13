@@ -35,7 +35,7 @@ class ActionExtractorTests(unittest.TestCase):
 
     def test_extract_from_fenced_json_block(self) -> None:
         candidate = self.extractor.extract(
-            'Aqui esta a acao:\n```json\n{"action":"stop","confidence":0.99,"params":{}}\n```'
+            'Here is the action:\n```json\n{"action":"stop","confidence":0.99,"params":{}}\n```'
         )
 
         self.assertIsNotNone(candidate)
@@ -62,8 +62,8 @@ class ActionExtractorTests(unittest.TestCase):
         self.assertEqual(candidate.params.get("direction"), "left")
         self.assertAlmostEqual(candidate.params.get("angle_deg"), 45.0)
 
-    def test_extract_from_pt_br_move_sentence(self) -> None:
-        candidate = self.extractor.extract("mova para frente 1,5 m a 0,6 m/s")
+    def test_extract_from_move_sentence_with_comma_decimal(self) -> None:
+        candidate = self.extractor.extract("move forward 1,5 m at 0,6 m/s")
 
         self.assertIsNotNone(candidate)
         assert candidate is not None
