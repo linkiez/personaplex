@@ -1,4 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,23 +28,16 @@ import asyncio
 from dataclasses import dataclass
 import random
 import os
-from pathlib import Path
-import tarfile
-import time
+from typing import Literal, Optional
 import secrets
 import sys
-from typing import Literal, Optional
 
 import aiohttp
 from aiohttp import web
-from huggingface_hub import hf_hub_download
 import numpy as np
 import sentencepiece
 import sphn
 import torch
-import random
-
-from .client_utils import make_log, colorize
 from .models import loaders, MimiModel, LMModel, LMGen
 from .utils.connection import create_ssl_context, get_lan_ip
 from .utils.logging import setup_logger, ColorizedLog
@@ -86,6 +78,52 @@ def wrap_with_system_tags(text: str) -> str:
     return f"<system> {cleaned} <system>"
 
 
+async def _recv_loop(
+    ws: web.WebSocketResponse,
+    opus_reader: "sphn.OpusStreamReader",
+    close_event: asyncio.Event,
+    clog: "ColorizedLog",
+) -> None:
+    """Receive audio messages from WebSocket and feed them to the Opus reader."""
+    try:
+        async for message in ws:
+            if message.type == aiohttp.WSMsgType.ERROR:
+                clog.log("error", f"{ws.exception()}")
+                break
+            if message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE):
+                break
+            if message.type != aiohttp.WSMsgType.BINARY:
+                clog.log("error", f"unexpected message type {message.type}")
+                continue
+            payload = message.data
+            if not isinstance(payload, bytes):
+                clog.log("error", f"unsupported message type {type(payload)}")
+                continue
+            if len(payload) == 0:
+                clog.log("warning", "empty message")
+                continue
+            if payload[0] == 1:  # audio
+                opus_reader.append_bytes(payload[1:])
+            else:
+                clog.log("warning", f"unknown message kind {payload[0]}")
+    finally:
+        close_event.set()
+        clog.log("info", "connection closed")
+
+
+async def _send_loop(
+    ws: web.WebSocketResponse,
+    opus_writer: "sphn.OpusStreamWriter",
+    close_event: asyncio.Event,
+) -> None:
+    """Forward encoded audio frames to the WebSocket client."""
+    while not close_event.is_set():
+        await asyncio.sleep(0.001)
+        msg = opus_writer.read_bytes()
+        if len(msg) > 0:
+            await ws.send_bytes(b"\x01" + msg)
+
+
 @dataclass
 class ServerState:
     mimi: MimiModel
@@ -110,12 +148,12 @@ class ServerState:
                             frame_rate=self.mimi.frame_rate,
                             save_voice_prompt_embeddings=save_voice_prompt_embeddings,
         )
-        
+
         self.lock = asyncio.Lock()
         self.mimi.streaming_forever(1)
         self.other_mimi.streaming_forever(1)
         self.lm_gen.streaming_forever(1)
-    
+
     def warmup(self):
         for _ in range(4):
             chunk = torch.zeros(1, 1, self.frame_size, dtype=torch.float32, device=self.device)
@@ -131,131 +169,99 @@ class ServerState:
         if self.device.type == 'cuda':
             torch.cuda.synchronize()
 
+    def _resolve_voice_prompt(self, request: web.Request) -> Optional[str]:
+        """Resolve and validate the voice prompt path from the request query."""
+        if self.voice_prompt_dir is None:
+            return None
+        filename = request.query.get("voice_prompt")
+        if not filename:
+            return None
+        path = os.path.join(self.voice_prompt_dir, filename)
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Requested voice prompt '{filename}' not found in '{self.voice_prompt_dir}'"
+            )
+        return path
 
-    async def handle_chat(self, request):
-        ws = web.WebSocketResponse()
-        await ws.prepare(request)
-        clog = ColorizedLog.randomize()
-        peer = request.remote  # IP
-        peer_port = request.transport.get_extra_info("peername")[1]  # Port
-        clog.log("info", f"Incoming connection from {peer}:{peer_port}")
-
-        # self.lm_gen.temp = float(request.query["audio_temperature"])
-        # self.lm_gen.temp_text = float(request.query["text_temperature"])
-        # self.lm_gen.top_k_text = max(1, int(request.query["text_topk"]))
-        # self.lm_gen.top_k = max(1, int(request.query["audio_topk"]))
-        
-        # Construct full voice prompt path
-        requested_voice_prompt_path = None
-        voice_prompt_path = None
-        if self.voice_prompt_dir is not None:
-            voice_prompt_filename = request.query["voice_prompt"]
-            requested_voice_prompt_path = None
-            if voice_prompt_filename is not None:
-                requested_voice_prompt_path = os.path.join(self.voice_prompt_dir, voice_prompt_filename)
-            # If the voice prompt file does not exist, find a valid (s0) voiceprompt file in the directory
-            if requested_voice_prompt_path is None or not os.path.exists(requested_voice_prompt_path):
-                raise FileNotFoundError(
-                    f"Requested voice prompt '{voice_prompt_filename}' not found in '{self.voice_prompt_dir}'"
-                )
-            else:
-                voice_prompt_path = requested_voice_prompt_path
-                
-        if self.lm_gen.voice_prompt != voice_prompt_path:
+    def _configure_lm_prompts(self, request: web.Request, voice_prompt_path: Optional[str]) -> None:
+        """Load voice and text prompts into the LM generator for this request."""
+        if voice_prompt_path is not None and self.lm_gen.voice_prompt != voice_prompt_path:
             if voice_prompt_path.endswith('.pt'):
-                # Load pre-saved voice prompt embeddings
                 self.lm_gen.load_voice_prompt_embeddings(voice_prompt_path)
             else:
                 self.lm_gen.load_voice_prompt(voice_prompt_path)
-        self.lm_gen.text_prompt_tokens = self.text_tokenizer.encode(wrap_with_system_tags(request.query["text_prompt"])) if len(request.query["text_prompt"]) > 0 else None
-        seed = int(request["seed"]) if "seed" in request.query else None
+        text_prompt = request.query.get("text_prompt", "")
+        self.lm_gen.text_prompt_tokens = (
+            self.text_tokenizer.encode(wrap_with_system_tags(text_prompt))
+            if text_prompt else None
+        )
 
-        async def recv_loop():
-            nonlocal close
-            try:
-                async for message in ws:
-                    if message.type == aiohttp.WSMsgType.ERROR:
-                        clog.log("error", f"{ws.exception()}")
-                        break
-                    elif message.type == aiohttp.WSMsgType.CLOSED:
-                        break
-                    elif message.type == aiohttp.WSMsgType.CLOSE:
-                        break
-                    elif message.type != aiohttp.WSMsgType.BINARY:
-                        clog.log("error", f"unexpected message type {message.type}")
-                        continue
-                    message = message.data
-                    if not isinstance(message, bytes):
-                        clog.log("error", f"unsupported message type {type(message)}")
-                        continue
-                    if len(message) == 0:
-                        clog.log("warning", "empty message")
-                        continue
-                    kind = message[0]
-                    if kind == 1:  # audio
-                        payload = message[1:]
-                        opus_reader.append_bytes(payload)
-                    else:
-                        clog.log("warning", f"unknown message kind {kind}")
-            finally:
-                close = True
-                clog.log("info", "connection closed")
-
-        async def opus_loop():
-            all_pcm_data = None
-
-            while True:
-                if close:
-                    return
-                await asyncio.sleep(0.001)
-                pcm = opus_reader.read_pcm()
-                if pcm.shape[-1] == 0:
+    async def _process_pcm_frames(
+        self,
+        ws: web.WebSocketResponse,
+        opus_writer: "sphn.OpusStreamWriter",
+        all_pcm_data: np.ndarray,
+    ) -> np.ndarray:
+        """Process complete PCM frames through MIMI + LM and encode responses."""
+        while all_pcm_data.shape[-1] >= self.frame_size:
+            chunk = all_pcm_data[: self.frame_size]
+            all_pcm_data = all_pcm_data[self.frame_size:]
+            chunk = torch.from_numpy(chunk).to(device=self.device)[None, None]
+            codes = self.mimi.encode(chunk)
+            _ = self.other_mimi.encode(chunk)
+            for c in range(codes.shape[-1]):
+                tokens = self.lm_gen.step(codes[:, :, c: c + 1])
+                if tokens is None:
                     continue
-                if all_pcm_data is None:
-                    all_pcm_data = pcm
-                else:
-                    all_pcm_data = np.concatenate((all_pcm_data, pcm))
-                while all_pcm_data.shape[-1] >= self.frame_size:
-                    be = time.time()
-                    chunk = all_pcm_data[: self.frame_size]
-                    all_pcm_data = all_pcm_data[self.frame_size:]
-                    chunk = torch.from_numpy(chunk)
-                    chunk = chunk.to(device=self.device)[None, None]
-                    codes = self.mimi.encode(chunk)
-                    _ = self.other_mimi.encode(chunk)
-                    for c in range(codes.shape[-1]):
-                        tokens = self.lm_gen.step(codes[:, :, c: c + 1])
-                        if tokens is None:
-                            continue
-                        assert tokens.shape[1] == self.lm_gen.lm_model.dep_q + 1
-                        main_pcm = self.mimi.decode(tokens[:, 1:9])
-                        _ = self.other_mimi.decode(tokens[:, 1:9])
-                        main_pcm = main_pcm.cpu()
-                        opus_writer.append_pcm(main_pcm[0, 0].numpy())
-                        text_token = tokens[0, 0, 0].item()
-                        if text_token not in (0, 3):
-                            _text = self.text_tokenizer.id_to_piece(text_token)  # type: ignore
-                            _text = _text.replace("▁", " ")
-                            msg = b"\x02" + bytes(_text, encoding="utf8")
-                            await ws.send_bytes(msg)
-                        else:
-                            text_token_map = ['EPAD', 'BOS', 'EOS', 'PAD']
+                assert tokens.shape[1] == self.lm_gen.lm_model.dep_q + 1
+                main_pcm = self.mimi.decode(tokens[:, 1:9])
+                _ = self.other_mimi.decode(tokens[:, 1:9])
+                opus_writer.append_pcm(main_pcm.cpu()[0, 0].numpy())
+                text_token = tokens[0, 0, 0].item()
+                if text_token not in (0, 3):
+                    _text = self.text_tokenizer.id_to_piece(text_token)  # type: ignore
+                    _text = _text.replace("\u2581", " ")
+                    await ws.send_bytes(b"\x02" + bytes(_text, encoding="utf8"))
+        return all_pcm_data
 
-        async def send_loop():
-            while True:
-                if close:
-                    return
-                await asyncio.sleep(0.001)
-                msg = opus_writer.read_bytes()
-                if len(msg) > 0:
-                    await ws.send_bytes(b"\x01" + msg)
+    async def _opus_loop(
+        self,
+        ws: web.WebSocketResponse,
+        opus_reader: "sphn.OpusStreamReader",
+        opus_writer: "sphn.OpusStreamWriter",
+        close_event: asyncio.Event,
+    ) -> None:
+        """Read decoded PCM from the Opus reader, run inference, send audio."""
+        all_pcm_data: Optional[np.ndarray] = None
+        while not close_event.is_set():
+            await asyncio.sleep(0.001)
+            pcm = opus_reader.read_pcm()
+            if pcm.shape[-1] == 0:
+                continue
+            all_pcm_data = pcm if all_pcm_data is None else np.concatenate((all_pcm_data, pcm))
+            all_pcm_data = await self._process_pcm_frames(ws, opus_writer, all_pcm_data)
+
+    async def handle_chat(self, request: web.Request) -> web.WebSocketResponse:
+        """Handle a WebSocket conversation session."""
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        clog = ColorizedLog.randomize()
+        peer = request.remote
+        peer_port = request.transport.get_extra_info("peername")[1]
+        clog.log("info", f"Incoming connection from {peer}:{peer_port}")
+
+        voice_prompt_path = self._resolve_voice_prompt(request)
+        self._configure_lm_prompts(request, voice_prompt_path)
+        seed = int(request.query["seed"]) if "seed" in request.query else None
 
         clog.log("info", "accepted connection")
-        if len(request.query["text_prompt"]) > 0:
-            clog.log("info", f"text prompt: {request.query['text_prompt']}")
-        if len(request.query["voice_prompt"]) > 0:
-            clog.log("info", f"voice prompt: {voice_prompt_path} (requested: {requested_voice_prompt_path})")
-        close = False
+        text_prompt = request.query.get("text_prompt", "")
+        if text_prompt:
+            clog.log("info", f"text prompt: {text_prompt}")
+        if voice_prompt_path:
+            clog.log("info", f"voice prompt: {voice_prompt_path}")
+
+        close_event = asyncio.Event()
         async with self.lock:
             if seed is not None and seed != -1:
                 seed_all(seed)
@@ -265,90 +271,50 @@ class ServerState:
             self.mimi.reset_streaming()
             self.other_mimi.reset_streaming()
             self.lm_gen.reset_streaming()
-            async def is_alive():
-                if close or ws.closed:
+
+            async def is_alive() -> bool:
+                if close_event.is_set() or ws.closed:
                     return False
                 try:
-                    # Check for disconnect without waiting too long
                     msg = await asyncio.wait_for(ws.receive(), timeout=0.01)
-                    if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                        return False
+                    return msg.type not in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.ERROR,
+                    )
                 except asyncio.TimeoutError:
-                    # No messages → client probably still alive
                     return True
                 except aiohttp.ClientConnectionError:
                     return False
-                return True
-            # Reuse mimi for encoding voice prompt and then reset it before conversation starts
+
             await self.lm_gen.step_system_prompts_async(self.mimi, is_alive=is_alive)
             self.mimi.reset_streaming()
             clog.log("info", "done with system prompts")
-            # Send the handshake.
             if await is_alive():
                 await ws.send_bytes(b"\x00")
                 clog.log("info", "sent handshake bytes")
-                # Clean cancellation manager
                 tasks = [
-                    asyncio.create_task(recv_loop()),
-                    asyncio.create_task(opus_loop()),
-                    asyncio.create_task(send_loop()),
+                    asyncio.create_task(_recv_loop(ws, opus_reader, close_event, clog)),
+                    asyncio.create_task(self._opus_loop(ws, opus_reader, opus_writer, close_event)),
+                    asyncio.create_task(_send_loop(ws, opus_writer, close_event)),
                 ]
-
-                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                # Force-kill remaining tasks
+                _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in pending:
                     task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
+                await asyncio.gather(*pending, return_exceptions=True)
                 await ws.close()
                 clog.log("info", "session closed")
-                # await asyncio.gather(opus_loop(), recv_loop(), send_loop())
         clog.log("info", "done with connection")
         return ws
 
 
-def _get_voice_prompt_dir(voice_prompt_dir: Optional[str], hf_repo: str) -> Optional[str]:
-    """
-    If voice_prompt_dir is None:
-      - download voices.tgz from HF
-      - extract it once
-      - return extracted directory
-    If voice_prompt_dir is provided:
-      - just return it
-    """
-    if voice_prompt_dir is not None:
-        return voice_prompt_dir
-
-    logger.info("retrieving voice prompts")
-
-    voices_tgz = hf_hub_download(hf_repo, "voices.tgz")
-    voices_tgz = Path(voices_tgz)
-    voices_dir = voices_tgz.parent / "voices"
-
-    if not voices_dir.exists():
-        logger.info(f"extracting {voices_tgz} to {voices_dir}")
-        with tarfile.open(voices_tgz, "r:gz") as tar:
-            tar.extractall(path=voices_tgz.parent)
-
-    if not voices_dir.exists():
-        raise RuntimeError("voices.tgz did not contain a 'voices/' directory")
-
-    return str(voices_dir)
+def _get_voice_prompt_dir(voice_prompt_dir: Optional[str]) -> Optional[str]:
+    """Return the voice prompt directory if provided, otherwise None."""
+    return voice_prompt_dir
 
 
 def _get_static_path(static: Optional[str]) -> Optional[str]:
-    if static is None:
-        logger.info("retrieving the static content")
-        dist_tgz = hf_hub_download("nvidia/personaplex-7b-v1", "dist.tgz")
-        dist_tgz = Path(dist_tgz)
-        dist = dist_tgz.parent / "dist"
-        if not dist.exists():
-            with tarfile.open(dist_tgz, "r:gz") as tar:
-                tar.extractall(path=dist_tgz.parent)
-        return str(dist)
-    elif static != "none":
+    if static is not None and static != "none":
         # When set to the "none" string, we don't serve any static content.
         return static
     return None
@@ -366,19 +332,17 @@ def main():
     parser.add_argument("--tokenizer", type=str, help="Path to a local tokenizer file.")
     parser.add_argument("--moshi-weight", type=str, help="Path to a local checkpoint file for Moshi.")
     parser.add_argument("--mimi-weight", type=str, help="Path to a local checkpoint file for Mimi.")
-    parser.add_argument("--hf-repo", type=str, default=loaders.DEFAULT_REPO,
-                        help="HF repo to look into, defaults PersonaPlex. "
-                             "Use this to select a different pre-trained model.")
-    parser.add_argument("--device", type=str, default="cuda", help="Device on which to run, defaults to 'cuda'.")
+    parser.add_argument("--device", type=str, default=os.environ.get("MOSHI_DEVICE", "cuda"),
+                        help="Device on which to run, defaults to 'cuda'.")
     parser.add_argument("--cpu-offload", action="store_true",
                         help="Offload LM model layers to CPU when GPU memory is insufficient. "
                              "Requires 'accelerate' package.")
     parser.add_argument(
         "--voice-prompt-dir",
         type=str,
+        default=os.environ.get("MOSHI_VOICE_PROMPT_DIR"),
         help=(
             "Directory containing voice prompt files. "
-            "If omitted, voices.tgz is downloaded from HF and extracted."
             "Voice prompt filenames from client requests will be joined with this directory path."
         )
     )
@@ -392,10 +356,7 @@ def main():
     )
 
     args = parser.parse_args()
-    args.voice_prompt_dir = _get_voice_prompt_dir(
-        args.voice_prompt_dir,
-        args.hf_repo,
-    )
+    args.voice_prompt_dir = _get_voice_prompt_dir(args.voice_prompt_dir)
     if args.voice_prompt_dir is not None:
         assert os.path.exists(args.voice_prompt_dir), \
             f"Directory missing: {args.voice_prompt_dir}"
@@ -424,24 +385,26 @@ def main():
         else:
             tunnel_token = args.gradio_tunnel_token
 
-    # Download config.json to increment download counter
-    # No worries about double-counting since config.json will be cached the second time
-    hf_hub_download(args.hf_repo, "config.json")
-
     logger.info("loading mimi")
     if args.mimi_weight is None:
-        args.mimi_weight = hf_hub_download(args.hf_repo, loaders.MIMI_NAME)
+        raise ValueError(
+            "--mimi-weight is required. Provide the path to a local MIMI checkpoint."
+        )
     mimi = loaders.get_mimi(args.mimi_weight, args.device)
     other_mimi = loaders.get_mimi(args.mimi_weight, args.device)
     logger.info("mimi loaded")
 
     if args.tokenizer is None:
-        args.tokenizer = hf_hub_download(args.hf_repo, loaders.TEXT_TOKENIZER_NAME)
+        raise ValueError(
+            "--tokenizer is required. Provide the path to a local SentencePiece tokenizer file."
+        )
     text_tokenizer = sentencepiece.SentencePieceProcessor(args.tokenizer)  # type: ignore
 
     logger.info("loading moshi")
     if args.moshi_weight is None:
-        args.moshi_weight = hf_hub_download(args.hf_repo, loaders.MOSHI_NAME)
+        raise ValueError(
+            "--moshi-weight is required. Provide the path to a local Moshi checkpoint."
+        )
     lm = loaders.get_moshi_lm(args.moshi_weight, device=args.device, cpu_offload=args.cpu_offload)
     lm.eval()
     logger.info("moshi loaded")
@@ -458,9 +421,34 @@ def main():
     state.warmup()
     app = web.Application()
     app.router.add_get("/api/chat", state.handle_chat)
+
+    def handle_health(_):
+        return web.Response(text="ok", content_type="text/plain")
+    app.router.add_get("/health", handle_health)
+    _AUTOCONNECT_SCRIPT = (
+        "<script>\n"
+        "(function(){\n"
+        "  if(new URLSearchParams(window.location.search).get('autoconnect')!=='1')return;\n"
+        "  function tryClick(){\n"
+        "    var btn=Array.from(document.querySelectorAll('button'))"
+        ".find(function(b){return /connect/i.test(b.textContent);});\n"
+        "    if(btn){btn.click();return;}\n"
+        "    setTimeout(tryClick,100);\n"
+        "  }\n"
+        "  setTimeout(tryClick,500);\n"
+        "})();\n"
+        "</script>\n"
+    )
+
     if static_path is not None:
-        async def handle_root(_):
-            return web.FileResponse(os.path.join(static_path, "index.html"))
+        _index_html_path = os.path.join(static_path, "index.html")
+        with open(_index_html_path, "r", encoding="utf-8") as _f:
+            _index_html_cached = _f.read().replace(
+                "</body>", _AUTOCONNECT_SCRIPT + "</body>", 1
+            )
+
+        def handle_root(_):
+            return web.Response(text=_index_html_cached, content_type="text/html")
 
         logger.info(f"serving static content from {static_path}")
         app.router.add_get("/", handle_root)

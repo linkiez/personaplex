@@ -1,20 +1,19 @@
 [project]
-name = "moshi-personaplex"
+name = "moshi-voice"
 requires-python = ">= 3.10"
-description = "Personaplex finetune of moshi to enable role and voice control."
+description = "Full-duplex voice conversation server with wake word detection and LocalAI backend."
 dependencies = [
     "numpy >= 1.26, < 2.2",
     "safetensors >= 0.4.0, < 0.5",
-    "huggingface-hub >= 0.24, < 0.25",
     "einops == 0.7",
     "sentencepiece == 0.2",
     "sounddevice == 0.5",
     "sphn >= 0.1.4, < 0.2",
     "torch >= 2.2.0, < 2.5",
     "aiohttp>=3.10.5, <3.11",
+    "openai >= 1.0",
 ]
-authors = [{name="Rajarshi Roy", email="rajarshir@nvidia.com"}]
-maintainers = [{name="Rajarshi Roy", email="rajarshir@nvidia.com"}]
+authors = [{name="moshi-voice contributors"}]
 license = {text = "MIT"}
 dynamic = ["version"]
 readme = "README.md"
@@ -22,6 +21,7 @@ readme = "README.md"
 [project.scripts]
 moshi-server = "moshi.server:main"
 moshi-offline = "moshi.offline:main"
+moshi-openclaw-monitor = "moshi.openclaw_monitor:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "moshi.__version__"}

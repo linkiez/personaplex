@@ -1,4 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
@@ -42,7 +41,7 @@ FRAME_RATE = 12.5
 TEXT_TOKENIZER_NAME = 'tokenizer_spm_32k_3.model'
 MOSHI_NAME = 'model.safetensors'
 MIMI_NAME = 'tokenizer-e351c8d8-checkpoint125.safetensors'
-DEFAULT_REPO = 'nvidia/personaplex-7b-v1'
+DEFAULT_REPO = 'kyutai/moshiko-pytorch-bf16'
 
 
 _seanet_kwargs = {
@@ -122,8 +121,11 @@ _lm_kwargs = {
 }
 
 
+_SAFETENSORS_SUFFIXES = {".safetensors", ".sft", ".sfts"}
+
+
 def _is_safetensors(path: Path | str) -> bool:
-    return Path(path).suffix in (".safetensors", ".sft", ".sfts")
+    return Path(path).suffix in _SAFETENSORS_SUFFIXES
 
 
 def get_mimi(filename: str | Path,
@@ -161,6 +163,56 @@ def get_mimi(filename: str | Path,
         model.load_state_dict(pkg["model"])
     model.set_num_codebooks(8)
     return model
+
+
+def _load_state_dict_from_file(filename: str, device: torch.device | str) -> dict:
+    """Load state dict from a .safetensors or torch checkpoint file."""
+    if _is_safetensors(filename):
+        dev = torch.device(device) if isinstance(device, str) else device
+        return load_file(filename, device="cpu" if dev.type == "mps" else dev.type)
+    with open(filename, "rb") as f:
+        return torch.load(f, map_location="cpu")
+
+
+def _try_copy_missing_weight(name: str, state_dict: dict, to_replace: list) -> bool:
+    """Try to fill a missing weight by copying from the corresponding 0..7 layer index.
+
+    Maps depformer layer indices 8..15 to their 0..7 counterparts for the given
+    weight groups. Returns True if a source weight was found and copied.
+    """
+    for old, new in zip(range(8), range(8, 16)):
+        for rep in to_replace:
+            needle = f"{rep}.{new}."
+            if needle in name:
+                src = name.replace(needle, f"{rep}.{old}.")
+                if src in state_dict:
+                    state_dict[name] = state_dict[src]
+                    return True
+                break
+    return False
+
+
+def _patch_model_weights(
+    state_dict: dict,
+    model_sd: dict,
+    copy_missing_weights: bool,
+) -> dict:
+    """Apply depformer weight patches and optionally fill missing weight keys."""
+    for name, tensor in state_dict.items():
+        if "depformer" in name and "self_attn" in name and name in model_sd:
+            if tensor.shape != model_sd[name].shape:
+                missing = (
+                    tensor
+                    if copy_missing_weights
+                    else model_sd[name][tensor.shape[0]:]
+                )
+                state_dict[name] = torch.concat([tensor, missing], dim=0)
+    if copy_missing_weights:
+        to_replace = ["gating", "linears", "depformer_in", "depformer_emb"]
+        for name in model_sd.keys():
+            if name not in state_dict:
+                _try_copy_missing_weight(name, state_dict, to_replace)
+    return state_dict
 
 
 def get_moshi_lm(
@@ -221,54 +273,11 @@ def get_moshi_lm(
         if "depformer" in name and "self_attn" in name and name in model_sd:
             if tensor.shape != model_sd[name].shape:
                 print("Expanding %s", name)
-                missing = (
-                    tensor
-                    if copy_missing_weights
-                    else model_sd[name][tensor.shape[0] :]
-                )
-                state_dict[name] = torch.concat([tensor, missing], dim=0)
+                state_dict = _load_state_dict_from_file(filename, device)
+                model_sd = model.state_dict()
+                state_dict = _patch_model_weights(state_dict, model_sd, copy_missing_weights)
 
-    # Patch 2: fill missing keys by copying 0..7 -> 8..15 for certain groups
-    if copy_missing_weights:
-        to_replace = ["gating", "linears", "depformer_in", "depformer_emb"]
-        for name in model_sd.keys():
-            if name in state_dict:
-                continue
-            replaced = False
-            for old, new in zip(range(8), range(8, 16)):
-                for rep in to_replace:
-                    needle = f"{rep}.{new}."
-                    if needle in name:
-                        src = name.replace(needle, f"{rep}.{old}.")
-                        if src in state_dict:
-                            print("Replacing %s <- %s", name, src)
-                            state_dict[name] = state_dict[src]
-                            replaced = True
-                        break
-                if replaced:
-                    break
-            if not replaced:
-                print("Missing %s", name)
-
-    # Assign weights to target device
-    dev = torch.device(device) if isinstance(device, str) else device
-    for key in state_dict:
-        state_dict[key] = state_dict[key].to(device=dev, dtype=dtype)
-    
-    model.load_state_dict(state_dict, strict=False, assign=True)
-    model.eval()
-    return model.to(device=device, dtype=dtype)
-
-
-def _get_moshi_lm_with_offload(
-    filename: str | Path,
-    copy_missing_weights: bool,
-    device: torch.device | str,
-    dtype: torch.dtype,
-    lm_kwargs: dict,
-) -> LMModel:
-    """Load Moshi LM with CPU offloading using accelerate.
-
+                # Assign weights to target device
     This function distributes model layers across GPU and CPU based on
     available GPU memory. Layers that don't fit on GPU are kept on CPU
     and moved to GPU only during forward pass.
@@ -287,46 +296,10 @@ def _get_moshi_lm_with_offload(
     # First, create model on CPU to get the architecture
     model = LMModel(device="cpu", dtype=dtype, **lm_kwargs)
 
-    # Load state_dict to CPU
-    if filename.endswith(".safetensors"):
-        state_dict = load_file(filename, device="cpu")
-    else:
-        with open(filename, "rb") as f:
-            state_dict = torch.load(f, map_location="cpu")
-
-    # Apply weight patches (same as non-offload path)
+    # Load and patch state_dict
+    state_dict = _load_state_dict_from_file(filename, "cpu")
     model_sd = model.state_dict()
-    for name, tensor in list(state_dict.items()):
-        if "depformer" in name and "self_attn" in name and name in model_sd:
-            if tensor.shape != model_sd[name].shape:
-                logger.info(f"Expanding {name}")
-                missing = (
-                    tensor
-                    if copy_missing_weights
-                    else model_sd[name][tensor.shape[0]:]
-                )
-                state_dict[name] = torch.concat([tensor, missing], dim=0)
-
-    if copy_missing_weights:
-        to_replace = ["gating", "linears", "depformer_in", "depformer_emb"]
-        for name in model_sd.keys():
-            if name in state_dict:
-                continue
-            replaced = False
-            for old, new in zip(range(8), range(8, 16)):
-                for rep in to_replace:
-                    needle = f"{rep}.{new}."
-                    if needle in name:
-                        src = name.replace(needle, f"{rep}.{old}.")
-                        if src in state_dict:
-                            logger.info(f"Replacing {name} <- {src}")
-                            state_dict[name] = state_dict[src]
-                            replaced = True
-                        break
-                if replaced:
-                    break
-            if not replaced:
-                logger.warning(f"Missing {name}")
+    state_dict = _patch_model_weights(state_dict, model_sd, copy_missing_weights)
 
     model.load_state_dict(state_dict, strict=False, assign=True)
 
