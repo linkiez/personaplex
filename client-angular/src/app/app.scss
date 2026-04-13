@@ -1,0 +1,115 @@
+:host {
+	display: block;
+	min-height: 100dvh;
+	background: radial-gradient(circle at 20% 20%, #1f2937 0%, #0f172a 55%, #020617 100%);
+	color: #e2e8f0;
+}
+
+.page {
+	min-height: 100dvh;
+	display: grid;
+	place-items: center;
+	padding: 1.25rem;
+}
+
+.card {
+	width: min(680px, 100%);
+	border: 1px solid #334155;
+	border-radius: 1rem;
+	background: color-mix(in srgb, #0f172a 90%, #1e293b 10%);
+	padding: 1.25rem;
+	display: grid;
+	gap: 1rem;
+}
+
+h1 {
+	margin: 0;
+	font-size: 1.5rem;
+	letter-spacing: 0.01em;
+}
+
+.subtitle {
+	margin: 0;
+	color: #cbd5e1;
+}
+
+.status-row {
+	display: flex;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+}
+
+.status-pill {
+	border-radius: 999px;
+	border: 1px solid #475569;
+	padding: 0.25rem 0.6rem;
+	font-size: 0.8rem;
+	background: #1e293b;
+}
+
+.actions {
+	display: flex;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+}
+
+.actions button {
+	border: 1px solid #475569;
+	background: #111827;
+	color: #e2e8f0;
+	border-radius: 0.6rem;
+	padding: 0.5rem 0.75rem;
+	cursor: pointer;
+}
+
+.actions button:hover {
+	background: #1f2937;
+}
+
+.action-feed {
+	display: grid;
+	gap: 0.5rem;
+	border: 1px solid #334155;
+	border-radius: 0.75rem;
+	padding: 0.75rem;
+	background: #0b1222;
+}
+
+.action-feed h2 {
+	margin: 0;
+	font-size: 1rem;
+}
+
+.action-feed-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 0.5rem;
+}
+
+.action-feed-item {
+	border: 1px solid #334155;
+	border-radius: 0.6rem;
+	padding: 0.5rem;
+	display: grid;
+	gap: 0.3rem;
+	background: #111827;
+}
+
+.action-feed-item.rejected {
+	border-color: #7f1d1d;
+	background: #1f1313;
+}
+
+.row {
+	display: flex;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+	align-items: center;
+}
+
+.row.small {
+	font-size: 0.78rem;
+	color: #cbd5e1;
+}

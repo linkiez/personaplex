@@ -1,0 +1,51 @@
+:host {
+  display: block;
+}
+
+.indicator-shell {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.text-block {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+  min-width: 8rem;
+}
+
+.text-block small {
+  color: #cbd5e1;
+  font-size: 0.72rem;
+}
+
+.dot {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.dot-gray { background: #64748b; }
+.dot-amber { background: #f59e0b; }
+.dot-sky { background: #38bdf8; }
+.dot-emerald { background: #10b981; }
+
+button {
+  border: 1px solid #475569;
+  background: transparent;
+  color: #e2e8f0;
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #1e293b;
+}
