@@ -176,7 +176,6 @@ pkg
 /moshi-demo/config.sh
 log.*
 laurent/cuda-test/check
-client/node_modules
 client-angular/node_modules
 client-angular/.angular
 client-angular/dist

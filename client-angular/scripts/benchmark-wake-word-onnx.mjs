@@ -69,14 +69,8 @@ async function resolveModelPath(argModelPath) {
   }
 
   const localAngularPublic = path.resolve(__dirname, '../public/models/silero-vad.onnx');
-  try {
-    await fs.access(localAngularPublic);
-    return localAngularPublic;
-  } catch {
-    // Continue trying fallback path.
-  }
-
-  return path.resolve(__dirname, '../../client/public/models/silero-vad.onnx');
+  await fs.access(localAngularPublic);
+  return localAngularPublic;
 }
 
 async function main() {

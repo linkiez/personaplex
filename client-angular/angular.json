@@ -31,7 +31,7 @@
               },
               {
                 "glob": "*.onnx",
-                "input": "../client/public/models",
+                "input": "public/models",
                 "output": "models"
               }
             ],
