@@ -74,16 +74,16 @@ Main endpoints:
 
 Wake-word detection runs locally in the browser and only opens the active conversation flow when voice activity and trigger conditions are met.
 
-See IMPLEMENTACAO_WAKE_WORD.md for implementation details and benchmarks.
+See WAKE_WORD_IMPLEMENTATION.md for implementation details and benchmarks.
 
 ## Documentation
 
 - INDEX.md: documentation map and navigation
-- GUIA_RAPIDO_SETUP.md: quick setup workflow
-- DOCUMENTACAO_TECNICA.md: architecture and technical internals
-- IMPLEMENTACAO_WAKE_WORD.md: wake-word implementation guide
+- QUICK_START_GUIDE.md: quick setup workflow
+- TECHNICAL_DOCUMENTATION.md: architecture and technical internals
+- WAKE_WORD_IMPLEMENTATION.md: wake-word implementation guide
 - OPENCLAW_MONITOR.md: OpenClaw monitor service guide
-- ROADMAP_ESTRATEGIA.md: project roadmap
+- PROJECT_ROADMAP.md: project roadmap
 
 ## License
 
