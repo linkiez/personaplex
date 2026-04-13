@@ -10,9 +10,11 @@ import { TextDisplay } from "./components/TextDisplay/TextDisplay";
 import { MediaContext } from "./MediaContext";
 import { ServerInfo } from "./components/ServerInfo/ServerInfo";
 import { ModelParamsValues, useModelParams } from "./hooks/useModelParams";
+import { useWakeWordState } from "./hooks/useWakeWordState";
 import fixWebmDuration from "webm-duration-fix";
 import { getMimeType, getExtension } from "./getMimeType";
 import { type ThemeType } from "./hooks/useSystemTheme";
+import { WakeWordIndicator } from "./components/WakeWordIndicator/WakeWordIndicator";
 
 type ConversationProps = {
   workerAddr: string;
@@ -44,15 +46,13 @@ const buildURL = ({
   textSeed: number;
   audioSeed: number;
 }) => {
-  const newWorkerAddr = useMemo(() => {
-    if (workerAddr == "same" || workerAddr == "") {
-      const newWorkerAddr = window.location.hostname + ":" + window.location.port;
-      console.log("Overriding workerAddr to", newWorkerAddr);
-      return newWorkerAddr;
-    }
-    return workerAddr;
-  }, [workerAddr]);
-  const wsProtocol = (window.location.protocol === 'https:') ? 'wss' : 'ws';
+  const newWorkerAddr = workerAddr == "same" || workerAddr == ""
+    ? `${globalThis.location.hostname}:${globalThis.location.port}`
+    : workerAddr;
+  if (workerAddr == "same" || workerAddr == "") {
+    console.log("Overriding workerAddr to", newWorkerAddr);
+  }
+  const wsProtocol = globalThis.location.protocol === "https:" ? "wss" : "ws";
   const url = new URL(`${wsProtocol}://${newWorkerAddr}/api/chat`);
   if(workerAuthId) {
     url.searchParams.append("worker_auth_id", workerAuthId);
@@ -153,11 +153,24 @@ export const Conversation:FC<ConversationProps> = ({
 
 
   useEffect(() => {
-    start();
     return () => {
       stop();
     };
-  }, [start, workerAuthId]);
+  }, [stop]);
+
+  const {
+    wakeState,
+    wakeWordEnabled,
+    silenceElapsedMs,
+    toggleWakeWord,
+    onWakeWordDetected,
+    onAudioActivity,
+  } = useWakeWordState({
+    socketStatus,
+    onRequireConnect: start,
+    onRequireDisconnect: stop,
+    silenceTimeoutMs: 12000,
+  });
 
   const startRecording = useCallback(() => {
     if(isRecording.current) {
@@ -200,16 +213,33 @@ export const Conversation:FC<ConversationProps> = ({
 
   const onPressConnect = useCallback(async () => {
       if (isOver) {
-        window.location.reload();
+        globalThis.location.reload();
       } else {
         audioContext.current?.resume();
-        if (socketStatus !== "connected") {
-          start();
-        } else {
+        if (socketStatus === "connected") {
           stop();
+        } else {
+          start();
         }
       }
     }, [socketStatus, isOver, start, stop]);
+
+  const socketContextValue = useMemo(() => ({
+    socketStatus,
+    sendMessage,
+    socket,
+  }), [socketStatus, sendMessage, socket]);
+
+  const mediaContextValue = useMemo(() => ({
+    startRecording,
+    stopRecording,
+    audioContext: audioContext as MutableRefObject<AudioContext>,
+    worklet: worklet as MutableRefObject<AudioWorkletNode>,
+    audioStreamDestination,
+    stereoMerger,
+    micDuration,
+    actualAudioPlayed,
+  }), [startRecording, stopRecording, audioContext, worklet, audioStreamDestination, stereoMerger, micDuration, actualAudioPlayed]);
 
   const socketColor = useMemo(() => {
     if (socketStatus === "connected") {
@@ -233,16 +263,10 @@ export const Conversation:FC<ConversationProps> = ({
   }, [isOver, socketStatus]);
 
   return (
-    <SocketContext.Provider
-      value={{
-        socketStatus,
-        sendMessage,
-        socket,
-      }}
-    >
+    <SocketContext.Provider value={socketContextValue}>
     <div>
     <div className="main-grid h-screen max-h-screen w-screen p-4 max-w-96 md:max-w-screen-lg m-auto">
-      <div className="controls text-center flex justify-center items-center gap-2">
+      <div className="controls text-center flex justify-center items-center gap-2 flex-wrap">
          <Button
             onClick={onPressConnect}
             disabled={socketStatus !== "connected" && !isOver}
@@ -250,19 +274,14 @@ export const Conversation:FC<ConversationProps> = ({
             {socketButtonMsg}
           </Button>
           <div className={`h-4 w-4 rounded-full ${socketColor}`} />
+          <WakeWordIndicator
+            wakeWordEnabled={wakeWordEnabled}
+            wakeState={wakeState}
+            silenceElapsedMs={silenceElapsedMs}
+            onToggle={toggleWakeWord}
+          />
         </div>
-        {audioContext.current && worklet.current && <MediaContext.Provider value={
-          {
-            startRecording,
-            stopRecording,
-            audioContext: audioContext as MutableRefObject<AudioContext>,
-            worklet: worklet as MutableRefObject<AudioWorkletNode>,
-            audioStreamDestination,
-            stereoMerger,
-            micDuration,
-            actualAudioPlayed,
-          }
-        }>
+        {audioContext.current && worklet.current && <MediaContext.Provider value={mediaContextValue}>
           <div className="relative player h-full max-h-full w-full justify-between gap-3 md:p-12">
               <ServerAudio
                 setGetAudioStats={(callback: () => AudioStats) =>
@@ -270,7 +289,13 @@ export const Conversation:FC<ConversationProps> = ({
                 }
                 theme={theme}
               />
-              <UserAudio theme={theme}/>
+              <UserAudio
+                theme={theme}
+                wakeWordEnabled={wakeWordEnabled}
+                wakeWordState={wakeState}
+                onWakeWordDetected={onWakeWordDetected}
+                onAudioActivity={onAudioActivity}
+              />
               <div className="pt-8 text-sm flex justify-center items-center flex-col download-links">
                 {audioURL && <div><a href={audioURL} download={`personaplex_audio.${getExtension("audio")}`} className="pt-2 text-center block">Download audio</a></div>}
               </div>
@@ -291,5 +316,5 @@ export const Conversation:FC<ConversationProps> = ({
 };
 
         // </MediaContext.Provider> : undefined}
-        // 
+        //
         // }></MediaContext.Provider>

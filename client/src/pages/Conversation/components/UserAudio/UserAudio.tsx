@@ -3,14 +3,33 @@ import { useSocketContext } from "../../SocketContext";
 import { useUserAudio } from "../../hooks/useUserAudio";
 import { ClientVisualizer } from "../AudioVisualizer/ClientVisualizer";
 import { type ThemeType } from "../../hooks/useSystemTheme";
+import { WakeWordState } from "../../hooks/useWakeWordState";
+import { useWakeWordDetector } from "../../hooks/useWakeWordDetector";
 
 type UserAudioProps = {
   theme: ThemeType;
+  wakeWordEnabled: boolean;
+  wakeWordState: WakeWordState;
+  onWakeWordDetected: () => void;
+  onAudioActivity: () => void;
 };
-export const UserAudio: FC<UserAudioProps> = ({theme}) => {
+export const UserAudio: FC<UserAudioProps> = ({
+  theme,
+  wakeWordEnabled,
+  wakeWordState,
+  onWakeWordDetected,
+  onAudioActivity,
+}) => {
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
   const { sendMessage, socketStatus } = useSocketContext();
   const containerRef = useRef<HTMLDivElement>(null);
+  const startedRef = useRef(false);
+  const { isVoiceActive } = useWakeWordDetector({
+    analyser,
+    enabled: wakeWordEnabled && wakeWordState === "standby",
+    threshold: 0.02,
+    onDetected: onWakeWordDetected,
+  });
   const onRecordingStart = useCallback(() => {
     console.log("Recording started");
   }, []);
@@ -21,6 +40,9 @@ export const UserAudio: FC<UserAudioProps> = ({theme}) => {
 
   const onRecordingChunk = useCallback(
     (chunk: Uint8Array) => {
+      if (wakeWordEnabled && wakeWordState !== "conversing") {
+        return;
+      }
       if (socketStatus !== "connected") {
         return;
       }
@@ -29,7 +51,7 @@ export const UserAudio: FC<UserAudioProps> = ({theme}) => {
         data: chunk,
       });
     },
-    [sendMessage, socketStatus],
+    [sendMessage, socketStatus, wakeWordEnabled, wakeWordState],
   );
 
   const { startRecordingUser, stopRecording } = useUserAudio({
@@ -48,21 +70,30 @@ export const UserAudio: FC<UserAudioProps> = ({theme}) => {
   });
 
   useEffect(() => {
-    let res: Awaited<ReturnType<typeof startRecordingUser>>;
-    if (socketStatus === "connected") {
-      startRecordingUser().then(result => {
-        if (result) {
-          res = result;
-          setAnalyser(result.analyser);
-        }
-      });
+    if (startedRef.current) {
+      return;
     }
+    startedRef.current = true;
+    let res: Awaited<ReturnType<typeof startRecordingUser>>;
+    startRecordingUser().then(result => {
+      if (result) {
+        res = result;
+        setAnalyser(result.analyser);
+      }
+    });
     return () => {
       console.log("Stop recording called from somewhere else.");
       stopRecording();
       res?.source?.disconnect();
+      startedRef.current = false;
     };
-  }, [startRecordingUser, stopRecording, socketStatus]);
+  }, [startRecordingUser, stopRecording]);
+
+  useEffect(() => {
+    if (wakeWordState === "conversing" && isVoiceActive) {
+      onAudioActivity();
+    }
+  }, [wakeWordState, isVoiceActive, onAudioActivity]);
 
   return (
     <div className="user-audio h-5/6 aspect-square" ref={containerRef}>
