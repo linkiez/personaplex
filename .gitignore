@@ -177,6 +177,10 @@ pkg
 log.*
 laurent/cuda-test/check
 client/node_modules
+client-angular/node_modules
+client-angular/.angular
+client-angular/dist
+server/node_modules
 timings.json
 mlx-trace.json
 

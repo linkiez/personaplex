@@ -1,20 +1,138 @@
 services:
-  personaplex:
+  moshi-voice:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: moshi-voice
     ports:
-      - "8998:8998"
+      - "${MOSHI_PORT:-8998}:8998"
     environment:
+      # LocalAI
+      - LOCALAI_BASE_URL=${LOCALAI_BASE_URL:-http://localhost:8080}
+      - LOCALAI_MODEL=${LOCALAI_MODEL:-mistral}
+
+      # Servidor
+      - MOSHI_HOST=0.0.0.0
+      - MOSHI_PORT=8998
+
+      # Configuracao de Voz (opcional)
+      - MOSHI_VOICE_PROMPT_DIR=${MOSHI_VOICE_PROMPT_DIR:-}
+
+      # Computacao
+      - MOSHI_DEVICE=${MOSHI_DEVICE:-cuda}
+      - MOSHI_CPU_OFFLOAD=${MOSHI_CPU_OFFLOAD:-false}
+
+      # SSL (automatico)
       - NO_TORCH_COMPILE=1
+
+    # 📁 Volume para cache (modelos)
+    volumes:
+      - ./.cache:/root/.cache
+      - ./voice-prompts:/app/voice-prompts:ro  # Voice prompts customizados (opcional)
+
+    # 🔧 Arquivo .env
     env_file:
       - .env
+
+    # 🖥️ GPU NVIDIA (descomente se tiver NVIDIA GPU)
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
               count: 1
-              capabilities: [ gpu ]
+              capabilities: [gpu]
+
+    # Rede
+    networks:
+      - moshi-voice-network
+
+    # Health check
+    healthcheck:
+      test: ["CMD-SHELL", "/app/moshi/.venv/bin/python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8998/health')\" 2>/dev/null && echo ok || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+    # 🔁 Restart policy
+    restart: always
+
+  openclaw-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openclaw-monitor
+    command:
+      - /bin/bash
+      - -lc
+      - >-
+        /app/moshi/.venv/bin/moshi-openclaw-monitor
+        --openclaw-ws "${OPENCLAW_WS:-ws://host.docker.internal:7000/ws/audio}"
+        --moshi-ws "${MOSHI_WS:-ws://moshi-voice:8998/api/chat}"
+        --moshi-query "worker_auth_id=${MOSHI_WORKER_AUTH_ID:-silence_check}"
+        --reconnect-delay "${OPENCLAW_RECONNECT_DELAY:-2.0}"
+        --action-min-confidence "${OPENCLAW_ACTION_MIN_CONFIDENCE:-0.75}"
+        --max-action-distance-m "${OPENCLAW_MAX_ACTION_DISTANCE_M:-2.0}"
+        --max-action-speed-mps "${OPENCLAW_MAX_ACTION_SPEED_MPS:-1.2}"
+        --max-action-angle-deg "${OPENCLAW_MAX_ACTION_ANGLE_DEG:-180.0}"
+        --min-obstacle-distance-m "${OPENCLAW_MIN_OBSTACLE_DISTANCE_M:-0.3}"
+        --min-battery-pct "${OPENCLAW_MIN_BATTERY_PCT:-5.0}"
+        --sensor-stale-after-ms "${OPENCLAW_SENSOR_STALE_AFTER_MS:-3000}"
+        $( [[ -n "${OPENCLAW_ROSBRIDGE_HTTP_ENDPOINT:-}" ]] && echo --rosbridge-http-endpoint "${OPENCLAW_ROSBRIDGE_HTTP_ENDPOINT}" )
+        --rosbridge-timeout-s "${OPENCLAW_ROSBRIDGE_TIMEOUT_S:-1.5}"
+        $( [[ -n "${OPENCLAW_ROSBRIDGE_AUTH_TOKEN:-}" ]] && echo --rosbridge-auth-token "${OPENCLAW_ROSBRIDGE_AUTH_TOKEN}" )
+        $( [[ "${OPENCLAW_AUDIO_JSON_OUT:-false}" == "true" ]] && echo --audio-json-out )
+        $( [[ "${OPENCLAW_EMIT_ACTIONS:-false}" == "true" ]] && echo --emit-actions )
+        ${OPENCLAW_EXTRA_ARGS:-}
+    depends_on:
+      - moshi-voice
+    networks:
+      - moshi-voice-network
+    restart: always
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: moshi-voice-api
+    ports:
+      - "${API_PORT:-3001}:3001"
+    environment:
+      - PORT=3001
+      - DATABASE_URL=${DATABASE_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - NODE_ENV=${NODE_ENV:-production}
+    env_file:
+      - .env
+    networks:
+      - moshi-voice-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: always
+
+  nginx:
+    image: nginx:alpine
+    container_name: moshi-nginx
+    ports:
+      - "80:80"
+      - "443:443"
     volumes:
-      - ./.cache:/root/.cache
+      - ./deploy/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - api
+      - moshi-voice
+    networks:
+      - moshi-voice-network
+    restart: always
+
+# Rede compartilhada
+networks:
+  moshi-voice-network:
+    driver: bridge

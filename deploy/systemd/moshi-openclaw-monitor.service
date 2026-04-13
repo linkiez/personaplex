@@ -1,0 +1,41 @@
+[Unit]
+Description=Moshi OpenClaw Full-Duplex Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=moshi
+Group=moshi
+WorkingDirectory=/opt/moshi-voice/moshi
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/default/moshi-openclaw-monitor
+ExecStart=/bin/bash -lc '\
+  /opt/moshi-voice/.venv/bin/moshi-openclaw-monitor \
+    --openclaw-ws "${OPENCLAW_WS:-ws://127.0.0.1:7000/ws/audio}" \
+    --moshi-ws "${MOSHI_WS:-ws://127.0.0.1:8998/api/chat}" \
+    --moshi-query "worker_auth_id=${MOSHI_WORKER_AUTH_ID:-silence_check}" \
+    --reconnect-delay "${OPENCLAW_RECONNECT_DELAY:-2.0}" \
+    --action-min-confidence "${OPENCLAW_ACTION_MIN_CONFIDENCE:-0.75}" \
+    --max-action-distance-m "${OPENCLAW_MAX_ACTION_DISTANCE_M:-2.0}" \
+    --max-action-speed-mps "${OPENCLAW_MAX_ACTION_SPEED_MPS:-1.2}" \
+    --max-action-angle-deg "${OPENCLAW_MAX_ACTION_ANGLE_DEG:-180.0}" \
+    --min-obstacle-distance-m "${OPENCLAW_MIN_OBSTACLE_DISTANCE_M:-0.3}" \
+    --min-battery-pct "${OPENCLAW_MIN_BATTERY_PCT:-5.0}" \
+    --sensor-stale-after-ms "${OPENCLAW_SENSOR_STALE_AFTER_MS:-3000}" \
+    $( [[ -n "${OPENCLAW_ROSBRIDGE_HTTP_ENDPOINT:-}" ]] && echo --rosbridge-http-endpoint "${OPENCLAW_ROSBRIDGE_HTTP_ENDPOINT}" ) \
+    --rosbridge-timeout-s "${OPENCLAW_ROSBRIDGE_TIMEOUT_S:-1.5}" \
+    $( [[ -n "${OPENCLAW_ROSBRIDGE_AUTH_TOKEN:-}" ]] && echo --rosbridge-auth-token "${OPENCLAW_ROSBRIDGE_AUTH_TOKEN}" ) \
+    $( [[ "${OPENCLAW_AUDIO_JSON_OUT:-false}" == "true" ]] && echo --audio-json-out ) \
+    $( [[ "${OPENCLAW_EMIT_ACTIONS:-false}" == "true" ]] && echo --emit-actions ) \
+    ${OPENCLAW_EXTRA_ARGS:-} \
+'
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
