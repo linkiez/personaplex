@@ -8,53 +8,39 @@ from dataclasses import dataclass
 from typing import Any
 
 _ACTION_PATTERNS: tuple[tuple[re.Pattern[str], str, float], ...] = (
-    (re.compile(r"\b(move|go|walk|advance|forward|mova|andar|avance)\b", re.IGNORECASE), "move", 0.7),
-    (re.compile(r"\b(turn|rotate|gire|girar|rotacione)\b", re.IGNORECASE), "turn", 0.7),
-    (re.compile(r"\b(stop|halt|freeze|pare|parar)\b", re.IGNORECASE), "stop", 0.95),
-    (re.compile(r"\b(pick|grab|collect|pegue|pegar|colete)\b", re.IGNORECASE), "pick", 0.75),
-    (re.compile(r"\b(drop|release|solte|largar)\b", re.IGNORECASE), "drop", 0.75),
+    (re.compile(r"\b(move|go|walk|advance|forward)\b", re.IGNORECASE), "move", 0.7),
+    (re.compile(r"\b(turn|rotate)\b", re.IGNORECASE), "turn", 0.7),
+    (re.compile(r"\b(stop|halt|freeze)\b", re.IGNORECASE), "stop", 0.95),
+    (re.compile(r"\b(pick|grab|collect)\b", re.IGNORECASE), "pick", 0.75),
+    (re.compile(r"\b(drop|release)\b", re.IGNORECASE), "drop", 0.75),
 )
 
 _ACTION_ALIASES: dict[str, str] = {
     "advance": "move",
-    "mova": "move",
-    "andar": "move",
-    "avance": "move",
     "rotate": "turn",
-    "gire": "turn",
-    "girar": "turn",
-    "rotacione": "turn",
     "halt": "stop",
     "freeze": "stop",
-    "pare": "stop",
-    "parar": "stop",
     "grab": "pick",
     "collect": "pick",
-    "pegue": "pick",
-    "pegar": "pick",
-    "colete": "pick",
     "release": "drop",
-    "solte": "drop",
-    "largar": "drop",
 }
 
 _DIRECTION_ALIASES: dict[str, str] = {
-    "frente": "forward",
-    "tras": "backward",
-    "atras": "backward",
-    "esquerda": "left",
-    "direita": "right",
+    "forward": "forward",
+    "backward": "backward",
+    "left": "left",
+    "right": "right",
 }
 
 _DIRECTION_PATTERN = re.compile(
-    r"\b(left|right|forward|backward|frente|tras|atras|esquerda|direita)\b",
+    r"\b(left|right|forward|backward)\b",
     re.IGNORECASE,
 )
 _DISTANCE_PATTERN = re.compile(
-    r"\b(?P<value>\d+(?:[\.,]\d+)?)\s*(?P<unit>m|meter|meters|metro|metros|cm)\b",
+    r"\b(?P<value>\d+(?:[\.,]\d+)?)\s*(?P<unit>m|meter|meters|cm)\b",
     re.IGNORECASE,
 )
-_ANGLE_PATTERN = re.compile(r"\b(?P<value>\d+(?:[\.,]\d+)?)\s*(deg|degree|degrees|grau|graus)\b", re.IGNORECASE)
+_ANGLE_PATTERN = re.compile(r"\b(?P<value>\d+(?:[\.,]\d+)?)\s*(deg|degree|degrees)\b", re.IGNORECASE)
 _SPEED_PATTERN = re.compile(r"\b(at|a)\s+(?P<value>\d+(?:[\.,]\d+)?)\s*(m/s|mps)\b", re.IGNORECASE)
 _JSON_SNIPPET_PATTERN = re.compile(r"\{[\s\S]*\}")
 
