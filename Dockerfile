@@ -19,27 +19,27 @@ RUN uv sync
 
 RUN mkdir -p /app/ssl /app/voice-prompts
 
-# Criar script de entrada customizado
+# Create custom entrypoint script
 RUN <<'BASH_EOF'
 cat > /app/docker-entrypoint.sh << 'SCRIPT_EOF'
 #!/bin/bash
 set -e
 
-# Verificar HF_TOKEN
+# Validate HF_TOKEN
 if [ -z "$HF_TOKEN" ]; then
-    echo "❌ Erro: HF_TOKEN não configurado!"
-    echo "ℹ️  Configure em .env ou via variável de ambiente"
+    echo "ERROR: HF_TOKEN is not configured"
+    echo "Set it in .env or as an environment variable"
     exit 1
 fi
 
-# Construir comando
+# Build command
 CMD="/app/moshi/.venv/bin/python -m moshi.server"
 
-# Host e port
+# Host and port
 CMD="$CMD --host ${PERSONAPLEX_HOST:-0.0.0.0}"
 CMD="$CMD --port ${PERSONAPLEX_PORT:-8998}"
 
-# Device (cuda ou cpu)
+# Device (cuda or cpu)
 DEVICE=${PERSONAPLEX_DEVICE:-cuda}
 CMD="$CMD --device $DEVICE"
 
@@ -58,10 +58,10 @@ if [ "$PERSONAPLEX_CPU_OFFLOAD" = "true" ]; then
     CMD="$CMD --cpu-offload"
 fi
 
-echo "🚀 Iniciando PersonaPlex..."
-echo "ℹ️  Device: $DEVICE"
-echo "ℹ️  Modelo: ${PERSONAPLEX_HF_REPO:-nvidia/personaplex-7b-v1}"
-echo "ℹ️  CPU Offload: ${PERSONAPLEX_CPU_OFFLOAD:-false}"
+echo "Starting PersonaPlex runtime..."
+echo "Device: $DEVICE"
+echo "Model: ${PERSONAPLEX_HF_REPO:-nvidia/personaplex-7b-v1}"
+echo "CPU offload: ${PERSONAPLEX_CPU_OFFLOAD:-false}"
 echo ""
 
 exec $CMD

@@ -10,11 +10,11 @@ import { WakeWordState } from './wake-word-state.service';
       <div class="text-block">
         <strong>{{ label() }}</strong>
         @if (wakeWordEnabled() && wakeState() === 'conversing') {
-          <small>Silêncio: {{ silenceSeconds() }}s</small>
+          <small>Silence: {{ silenceSeconds() }}s</small>
         }
       </div>
       <button type="button" (click)="toggleRequested.emit()">
-        {{ wakeWordEnabled() ? 'Desativar wake' : 'Ativar wake' }}
+        {{ wakeWordEnabled() ? 'Disable wake' : 'Enable wake' }}
       </button>
     </div>
   `,
@@ -29,15 +29,15 @@ export class WakeWordIndicatorComponent {
 
   readonly label = computed(() => {
     if (!this.wakeWordEnabled()) {
-      return 'Modo contínuo';
+      return 'Continuous mode';
     }
     if (this.wakeState() === 'standby') {
       return 'Standby';
     }
     if (this.wakeState() === 'listening') {
-      return 'Ativando';
+      return 'Activating';
     }
-    return 'Conversando';
+    return 'Conversing';
   });
 
   readonly dotClass = computed(() => {

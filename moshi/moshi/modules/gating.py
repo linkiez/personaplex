@@ -57,7 +57,7 @@ class ActivationGating(nn.Module):
         super().__init__()
         # We should have 8 d^2 param, instead we will have
         # 2 * h * d + h * d = 3 h * d = 8 d^2
-        # so h = 8 d / 3 but following Hervé's advice we use 21 / 8 as an approx.
+        # so h = 8 d / 3 but following Herve's advice we use 21 / 8 as an approx.
         if dim_feedforward == 4 * dim:
             hidden = (21 * dim) // 8
         else:

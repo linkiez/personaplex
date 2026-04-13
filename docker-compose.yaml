@@ -11,30 +11,30 @@ services:
       - LOCALAI_BASE_URL=${LOCALAI_BASE_URL:-http://localhost:8080}
       - LOCALAI_MODEL=${LOCALAI_MODEL:-mistral}
 
-      # Servidor
+      # Server
       - MOSHI_HOST=0.0.0.0
       - MOSHI_PORT=8998
 
-      # Configuracao de Voz (opcional)
+      # Voice configuration (optional)
       - MOSHI_VOICE_PROMPT_DIR=${MOSHI_VOICE_PROMPT_DIR:-}
 
-      # Computacao
+      # Compute
       - MOSHI_DEVICE=${MOSHI_DEVICE:-cuda}
       - MOSHI_CPU_OFFLOAD=${MOSHI_CPU_OFFLOAD:-false}
 
-      # SSL (automatico)
+      # SSL (automatic)
       - NO_TORCH_COMPILE=1
 
-    # 📁 Volume para cache (modelos)
+    # Volume for model cache
     volumes:
       - ./.cache:/root/.cache
-      - ./voice-prompts:/app/voice-prompts:ro  # Voice prompts customizados (opcional)
+      - ./voice-prompts:/app/voice-prompts:ro  # Custom voice prompts (optional)
 
-    # 🔧 Arquivo .env
+    # .env file
     env_file:
       - .env
 
-    # 🖥️ GPU NVIDIA (descomente se tiver NVIDIA GPU)
+    # NVIDIA GPU (uncomment if available)
     deploy:
       resources:
         reservations:
@@ -43,7 +43,7 @@ services:
               count: 1
               capabilities: [gpu]
 
-    # Rede
+    # Network
     networks:
       - moshi-voice-network
 
@@ -55,7 +55,7 @@ services:
       retries: 3
       start_period: 120s
 
-    # 🔁 Restart policy
+    # Restart policy
     restart: always
 
   openclaw-monitor:
@@ -132,7 +132,7 @@ services:
       - moshi-voice-network
     restart: always
 
-# Rede compartilhada
+# Shared network
 networks:
   moshi-voice-network:
     driver: bridge

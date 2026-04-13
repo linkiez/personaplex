@@ -1,59 +1,59 @@
 # WakeWordDetectorService
 
-## Visão geral
+## Overview
 
-O WakeWordDetectorService gerencia captura de áudio do microfone, cálculo de energia (RMS) e inferência ONNX para detecção de atividade de voz em tempo real.
+WakeWordDetectorService manages microphone capture, RMS energy analysis, and ONNX inference for real-time voice activity detection.
 
-## Responsabilidades
+## Responsibilities
 
-- Inicializar e encerrar pipeline de áudio (`getUserMedia`, `AudioContext`, `AnalyserNode`).
-- Executar loop periódico de detecção com fallback seguro.
-- Publicar sinais reativos de estado do detector (modo, confiança, latência e erros).
-- Acionar transições no estado de wake word via `WakeWordStateService`.
+- Start and stop the audio pipeline (`getUserMedia`, `AudioContext`, `AnalyserNode`).
+- Execute the periodic detection loop with safe fallback behavior.
+- Expose reactive detector state signals (mode, confidence, latency, and errors).
+- Trigger wake-word state transitions through WakeWordStateService.
 
-## Entradas e saídas
+## Inputs and Outputs
 
-- Entradas:
-  - Fluxo de áudio do microfone.
-  - Estado do socket e wake word via `WakeWordStateService`.
-  - Modelo ONNX em `/models/silero-vad.onnx`.
-- Saídas:
-  - Signals públicas (`detectorMode`, `voiceLevel`, `onnxConfidence`, `lastInferenceMs`, `inferenceAvgMs`, `inferenceMaxMs`, `errorMessage`).
-  - Chamadas de transição (`onWakeWordDetected`, `onAudioActivity`).
+- Inputs:
+  - Microphone audio stream.
+  - Socket and wake state from WakeWordStateService.
+  - ONNX model at `/models/silero-vad.onnx`.
+- Outputs:
+  - Public signals (`detectorMode`, `voiceLevel`, `onnxConfidence`, `lastInferenceMs`, `inferenceAvgMs`, `inferenceMaxMs`, `errorMessage`).
+  - Transition callbacks (`onWakeWordDetected`, `onAudioActivity`).
 
-## Fluxo principal
+## Main Flow
 
 ```mermaid
 flowchart TD
-  A[startMicrophone] --> B[Configura AudioContext e AnalyserNode]
+  A[startMicrophone] --> B[Configure AudioContext and AnalyserNode]
   B --> C[initializeOnnx]
-  C --> D{Modelo ONNX carregado?}
-  D -- Sim --> E[Modo onnx]
-  D -- Não --> F[Modo rms]
-  E --> G[Loop de detecção]
+  C --> D{ONNX model loaded?}
+  D -- Yes --> E[onnx mode]
+  D -- No --> F[rms mode]
+  E --> G[detection loop]
   F --> G
   G --> H[runDetectionTick]
-  H --> I[Calcula RMS]
-  I --> J{ONNX disponível?}
-  J -- Sim --> K[Inferência e métricas de latência]
-  J -- Não --> L[Usa RMS]
-  K --> M[Atualiza confidence e estado ativo]
+  H --> I[Compute RMS]
+  I --> J{ONNX available?}
+  J -- Yes --> K[Inference and latency metrics]
+  J -- No --> L[Use RMS-only mode]
+  K --> M[Update confidence and active state]
   L --> M
-  M --> N{Wake habilitado e standby?}
-  N -- Sim --> O[tryTriggerWakeWord]
-  N -- Não --> P[Se conversando e ativo, onAudioActivity]
+  M --> N{Wake enabled and standby?}
+  N -- Yes --> O[tryTriggerWakeWord]
+  N -- No --> P[If conversing and active, call onAudioActivity]
 ```
 
-## Tratamento de erros e casos-limite
+## Error Handling and Edge Cases
 
-- Falha de permissão no microfone define `micStatus = error` e mensagem amigável.
-- Falha de carga/inferência ONNX ativa fallback para modo `rms` sem interromper detecção.
-- Suporte de compatibilidade para modelos ONNX com dois formatos de estado:
-  - `input/state` + `output/stateN`.
-  - `input/h,c` + `output/hn,cn`.
-- `stopMicrophone()` limpa timers, tracks, contexto de áudio e métricas acumuladas.
+- Microphone permission failures set `micStatus = error` with a user-facing error message.
+- ONNX loading or inference failures automatically switch to `rms` mode.
+- Supports both ONNX state formats:
+  - `input/state` + `output/stateN`
+  - `input/h,c` + `output/hn,cn`
+- `stopMicrophone()` clears timers, media tracks, audio context, and accumulated metrics.
 
-## Exemplos
+## Examples
 
 ```ts
 await wakeWordDetectorService.startMicrophone();
@@ -65,8 +65,8 @@ const avgMs = wakeWordDetectorService.inferenceAvgMs();
 wakeWordDetectorService.stopMicrophone();
 ```
 
-## Dependências e integrações
+## Dependencies and Integrations
 
-- `WakeWordStateService` para transições do fluxo de conversa.
-- `onnxruntime-web` para inferência WASM.
-- APIs WebAudio (`AudioContext`, `AnalyserNode`) e MediaDevices (`getUserMedia`).
+- WakeWordStateService for conversation state transitions.
+- `onnxruntime-web` for WASM inference.
+- Web APIs: `AudioContext`, `AnalyserNode`, `getUserMedia`.

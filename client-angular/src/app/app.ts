@@ -12,7 +12,7 @@ import { WakeWordStateService } from './wake-word/wake-word-state.service';
     <main class="page">
       <section class="card">
         <h1>Moshi Voice Angular</h1>
-        <p class="subtitle">Migração do frontend React para Angular em andamento.</p>
+        <p class="subtitle">React frontend migration to Angular is in progress.</p>
 
         <app-wake-word-indicator
           [wakeWordEnabled]="wakeWordEnabled()"
@@ -27,42 +27,42 @@ import { WakeWordStateService } from './wake-word/wake-word-state.service';
           <span class="status-pill">Mic: {{ micStatus() }}</span>
           <span class="status-pill">Detector: {{ detectorMode() }}</span>
           @if (detectorMode() === 'onnx') {
-            <span class="status-pill">Inferência: {{ lastInferenceMs() }}ms</span>
+            <span class="status-pill">Inference: {{ lastInferenceMs() }}ms</span>
           }
         </div>
 
         <div class="actions">
-          <button type="button" (click)="simulateWakeWord()">Simular wake word</button>
-          <button type="button" (click)="simulateAudioActivity()">Simular atividade de áudio</button>
+          <button type="button" (click)="simulateWakeWord()">Simulate wake word</button>
+          <button type="button" (click)="simulateAudioActivity()">Simulate audio activity</button>
           <button type="button" (click)="toggleConnection()">
-            {{ socketStatus() === 'connected' ? 'Desconectar' : 'Conectar' }}
+            {{ socketStatus() === 'connected' ? 'Disconnect' : 'Connect' }}
           </button>
           <button type="button" (click)="toggleMicrophone()">
-            {{ micStatus() === 'active' ? 'Parar microfone' : 'Iniciar microfone' }}
+            {{ micStatus() === 'active' ? 'Stop microphone' : 'Start microphone' }}
           </button>
-          <button type="button" (click)="simulateApprovedAction()">Simular ação aprovada</button>
-          <button type="button" (click)="simulateRejectedAction()">Simular ação rejeitada</button>
-          <button type="button" (click)="clearActionFeed()">Limpar feed de ações</button>
+          <button type="button" (click)="simulateApprovedAction()">Simulate approved action</button>
+          <button type="button" (click)="simulateRejectedAction()">Simulate rejected action</button>
+          <button type="button" (click)="clearActionFeed()">Clear action feed</button>
         </div>
 
         <div class="status-row">
-          <span class="status-pill">Nível voz: {{ voiceLevelPercent() }}%</span>
+          <span class="status-pill">Voice level: {{ voiceLevelPercent() }}%</span>
           @if (detectorMode() === 'onnx') {
-            <span class="status-pill">Confiança ONNX: {{ onnxConfidencePercent() }}%</span>
-            <span class="status-pill">Média inferência: {{ inferenceAvgMs() }}ms</span>
-            <span class="status-pill">Pico inferência: {{ inferenceMaxMs() }}ms</span>
-            <span class="status-pill">Amostras: {{ inferenceSamples() }}</span>
+            <span class="status-pill">ONNX confidence: {{ onnxConfidencePercent() }}%</span>
+            <span class="status-pill">Average inference: {{ inferenceAvgMs() }}ms</span>
+            <span class="status-pill">Max inference: {{ inferenceMaxMs() }}ms</span>
+            <span class="status-pill">Samples: {{ inferenceSamples() }}</span>
           }
         </div>
 
         @if (errorMessage()) {
-          <p class="subtitle">Erro detector: {{ errorMessage() }}</p>
+          <p class="subtitle">Detector error: {{ errorMessage() }}</p>
         }
 
         <section class="action-feed">
-          <h2>Feed de ações OpenClaw</h2>
+          <h2>OpenClaw action feed</h2>
           @if (actionEvents().length === 0) {
-            <p class="subtitle">Nenhum evento de ação registrado.</p>
+            <p class="subtitle">No action events recorded.</p>
           } @else {
             <ul class="action-feed-list">
               @for (event of actionEvents(); track event.id) {
@@ -74,12 +74,12 @@ import { WakeWordStateService } from './wake-word/wake-word-state.service';
                   </div>
                   <div class="row small">
                     <span>src: {{ event.source }}</span>
-                    <span>bateria: {{ event.sensor.batteryPct ?? '-' }}%</span>
-                    <span>obstáculo: {{ event.sensor.obstacleDistanceM ?? '-' }}m</span>
+                    <span>battery: {{ event.sensor.batteryPct ?? '-' }}%</span>
+                    <span>obstacle: {{ event.sensor.obstacleDistanceM ?? '-' }}m</span>
                     <span>e-stop: {{ event.sensor.emergencyStop ? 'on' : 'off' }}</span>
                   </div>
                   @if (event.reason) {
-                    <div class="row small">motivo: {{ event.reason }}</div>
+                    <div class="row small">reason: {{ event.reason }}</div>
                   }
                 </li>
               }
@@ -117,15 +117,15 @@ export class App {
 
   protected readonly statusLabel = computed(() => {
     if (!this.wakeWordEnabled()) {
-      return 'Modo contínuo ativo';
+      return 'Continuous mode enabled';
     }
     if (this.wakeState() === 'standby') {
-      return 'Aguardando wake word';
+      return 'Waiting for wake word';
     }
     if (this.wakeState() === 'listening') {
-      return 'Conectando servidor';
+      return 'Connecting to server';
     }
-    return 'Conversa ativa';
+    return 'Conversation active';
   });
 
   protected toggleWakeWord(): void {
